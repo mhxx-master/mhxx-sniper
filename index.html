@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MHXX お守りスナイプタイマー</title>
+<style>
+:root{
+  --bg:#111318;--panel:#1c2028;--panel2:#242a34;--text:#f4f6f8;
+  --muted:#aeb7c2;--accent:#4da3ff;--ok:#35c76f;--danger:#ff5d67;
+  --warn:#ffca3a;--border:#353d49;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP",sans-serif;
+  -webkit-tap-highlight-color:transparent;
+}
+.wrap{max-width:520px;margin:0 auto;padding:14px 12px 40px}
+h1{font-size:1.35rem;margin:8px 0 14px}
+.card{
+  background:var(--panel);border:1px solid var(--border);border-radius:16px;
+  padding:16px;margin:12px 0;box-shadow:0 7px 20px rgba(0,0,0,.18)
+}
+.card h2{font-size:1.08rem;margin:0 0 12px;color:var(--accent)}
+.big{
+  font-variant-numeric:tabular-nums;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  text-align:center;font-weight:800;line-height:1.08
+}
+.count{font-size:4.2rem;color:var(--accent);margin:8px 0}
+.time{font-size:2.6rem;margin:10px 0}
+.sub{font-size:.86rem;color:var(--muted);text-align:center;min-height:1.2em}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+label{font-size:.9rem;color:var(--muted)}
+input,select{
+  background:var(--panel2);color:var(--text);border:1px solid var(--border);
+  border-radius:10px;padding:10px 11px;font-size:1rem;min-width:0
+}
+input[type=number]{width:92px}
+button{
+  border:0;border-radius:11px;padding:11px 15px;font-size:1rem;font-weight:700;
+  color:#fff;background:#4b5563;touch-action:manipulation
+}
+button.primary{background:var(--ok)}
+button.danger{background:var(--danger)}
+button.warn{background:#9a7800}
+button.accent{background:#1676d2}
+button:disabled{opacity:.45}
+.controls{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:10px}
+.pill{
+  display:inline-block;background:var(--panel2);border:1px solid var(--border);
+  border-radius:999px;padding:7px 10px;font-size:.85rem;color:var(--muted)
+}
+.sep{height:1px;background:var(--border);margin:14px 0}
+.result{
+  background:#12161c;border:1px solid var(--border);border-radius:12px;padding:12px;
+  font-variant-numeric:tabular-nums;line-height:1.65
+}
+.result strong{color:var(--warn)}
+.frames{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.frames>div{display:flex;flex-direction:column;gap:4px}
+#lapList{margin:10px 0 0;padding-left:22px;max-height:160px;overflow:auto;color:var(--muted)}
+.flash{animation:flash .18s linear 2}
+@keyframes flash{50%{background:#fff;color:#000}}
+.note{font-size:.8rem;color:var(--muted);line-height:1.5;margin-top:8px}
+@media(max-width:420px){.count{font-size:3.6rem}.time{font-size:2.15rem}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>MHXX お守りスナイプタイマー <span class="pill">30fps</span></h1>
+
+<section class="card">
+  <h2>① Continue カウンター / メトロノーム</h2>
+  <div class="grid">
+    <div><label>Target</label><br><input id="targetCount" type="number" min="1" value="414"></div>
+    <div><label>BPM</label><br><input id="bpm" type="number" min="20" max="600" value="300"></div>
+  </div>
+  <div id="metCount" class="big count">0</div>
+  <div id="metStatus" class="sub">待機中</div>
+  <div class="controls">
+    <button id="metStart" class="primary">開始</button>
+    <button id="metPause" class="danger" disabled>停止</button>
+    <button id="metReset" class="warn">リセット</button>
+    <button id="manualPlus" class="accent">+1 手動</button>
+  </div>
+  <div class="note">setInterval任せではなく、実時間から次の拍を計算する方式にしてあるので、ブラウザ上でズレにくい。</div>
+</section>
+
+<section class="card">
+  <h2>② 調合開始 → HOME まで</h2>
+  <div id="swDisplay" class="big time">00:00.000</div>
+  <div class="sub">調合開始と同時に START、HOME を押す瞬間に STOP</div>
+  <div class="controls">
+    <button id="swStart" class="primary">START</button>
+    <button id="swStop" class="danger" disabled>STOP</button>
+    <button id="swLap">LAP</button>
+    <button id="swReset" class="warn">RESET</button>
+  </div>
+  <ol id="lapList"></ol>
+</section>
+
+<section class="card">
+  <h2>③ フレーム計算</h2>
+  <div class="grid">
+    <div><label>目標F</label><br><input id="targetFrame" type="number" value="296260"></div>
+    <div><label>調合解析で出たF</label><br><input id="currentFrame" type="number" placeholder="例 294000"></div>
+  </div>
+  <div class="row">
+    <label><input id="useSw" type="checkbox" checked> STOPまでの経過時間を追加消費として加味</label>
+  </div>
+  <div class="row">
+    <label>追加補正F</label><input id="extraFrames" type="number" value="0">
+  </div>
+  <div class="controls">
+    <button id="calcBtn" class="accent">残り時間を計算 → ④へ反映</button>
+  </div>
+  <div id="calcResult" class="result" style="margin-top:10px">現在Fを入れて計算してや。</div>
+</section>
+
+<section class="card">
+  <h2>④ 30fps カウントダウン</h2>
+  <div id="cdLabel" class="sub">待機中</div>
+  <div id="cdDisplay" class="big time">00:30:00F</div>
+  <div class="frames">
+    <div><label>分</label><input id="cdMin" type="number" min="0" value="0"></div>
+    <div><label>秒</label><input id="cdSec" type="number" min="0" max="59" value="30"></div>
+    <div><label>F</label><input id="cdFrame" type="number" min="0" max="29" value="0"></div>
+  </div>
+
+  <div class="sep"></div>
+  <div class="grid">
+    <div><label>開始猶予（秒）</label><br><input id="cdDelay" type="number" min="0" step="0.1" value="5"></div>
+    <div><label>入力補正（F）</label><br><input id="offsetFrame" type="number" value="0"></div>
+  </div>
+  <div class="row">
+    <label><input id="soundEnable" type="checkbox" checked> 10秒前から音を鳴らす</label>
+  </div>
+  <div class="note">入力補正F：早めたいならマイナス、遅めたいならプラス。例：4F早める → -4。</div>
+
+  <div class="controls">
+    <button id="cdStart" class="primary">開始</button>
+    <button id="cdStop" class="danger" disabled>停止</button>
+    <button id="cdReset" class="warn">リセット</button>
+  </div>
+</section>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const FPS = 30;
+  let audioCtx = null;
+
+  function now(){ return performance.now(); }
+
+  function ensureAudio(){
+    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+  }
+
+  function beep(freq=880, duration=.08, volume=.08){
+    if(!$('soundEnable')?.checked && freq !== 660) return;
+    ensureAudio();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.frequency.value=freq;
+    g.gain.setValueAtTime(volume,audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.0001,audioCtx.currentTime+duration);
+    o.connect(g);g.connect(audioCtx.destination);
+    o.start();o.stop(audioCtx.currentTime+duration);
+  }
+
+  // ---- Metronome ----
+  let metRunning=false, metStartT=0, metBaseCount=0, metRaf=0, lastPlayed=-1;
+
+  function metUpdate(){
+    if(!metRunning) return;
+    const bpm=Math.max(1,Number($('bpm').value)||300);
+    const interval=60000/bpm;
+    const elapsed=now()-metStartT;
+    const beats=Math.floor(elapsed/interval);
+    let count=metBaseCount+beats;
+
+    const target=Math.max(1,parseInt($('targetCount').value)||1);
+    if(count>target) count=target;
+    $('metCount').textContent=count;
+
+    if(beats!==lastPlayed){
+      lastPlayed=beats;
+      if(count>0 && count<=target){
+        ensureAudio();
+        const isTen=count%10===0;
+        const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+        o.frequency.value=isTen?1000:520;
+        g.gain.setValueAtTime(.055,audioCtx.currentTime);
+        g.gain.exponentialRampToValueAtTime(.0001,audioCtx.currentTime+.045);
+        o.connect(g);g.connect(audioCtx.destination);o.start();o.stop(audioCtx.currentTime+.045);
+      }
+    }
+
+    if(count>=target){
+      metRunning=false;
+      $('metStart').disabled=false;$('metPause').disabled=true;
+      $('metStatus').textContent='Target 到達';
+      $('metCount').classList.add('flash');
+      setTimeout(()=>$('metCount').classList.remove('flash'),500);
+      beep(1400,.25,.12);
+      return;
+    }
+    $('metStatus').textContent='カウント中';
+    metRaf=requestAnimationFrame(metUpdate);
+  }
+
+  $('metStart').onclick=()=>{
+    ensureAudio();
+    const shown=parseInt($('metCount').textContent)||0;
+    metBaseCount=shown;
+    metStartT=now();
+    lastPlayed=-1;
+    metRunning=true;
+    $('metStart').disabled=true;$('metPause').disabled=false;
+    metUpdate();
+  };
+  $('metPause').onclick=()=>{
+    if(!metRunning)return;
+    const bpm=Math.max(1,Number($('bpm').value)||300);
+    metBaseCount=Math.min(parseInt($('targetCount').value)||1, metBaseCount+Math.floor((now()-metStartT)/(60000/bpm)));
+    metRunning=false;cancelAnimationFrame(metRaf);
+    $('metCount').textContent=metBaseCount;
+    $('metStatus').textContent='停止中';
+    $('metStart').disabled=false;$('metPause').disabled=true;
+  };
+  $('metReset').onclick=()=>{
+    metRunning=false;cancelAnimationFrame(metRaf);metBaseCount=0;lastPlayed=-1;
+    $('metCount').textContent='0';$('metStatus').textContent='待機中';
+    $('metStart').disabled=false;$('metPause').disabled=true;
+  };
+  $('manualPlus').onclick=()=>{
+    if(metRunning)return;
+    const target=parseInt($('targetCount').value)||1;
+    metBaseCount=Math.min(target,(parseInt($('metCount').textContent)||0)+1);
+    $('metCount').textContent=metBaseCount;
+  };
+
+  // ---- Stopwatch ----
+  let swRunning=false, swStartT=0, swElapsed=0, swRaf=0, laps=[];
+
+  function fmtMs(ms){
+    ms=Math.max(0,ms);
+    const m=Math.floor(ms/60000);
+    const s=Math.floor(ms/1000)%60;
+    const x=Math.floor(ms%1000);
+    return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+'.'+String(x).padStart(3,'0');
+  }
+  function swCurrent(){ return swElapsed+(swRunning?(now()-swStartT):0); }
+  function swUpdate(){
+    if(!swRunning)return;
+    $('swDisplay').textContent=fmtMs(swCurrent());
+    swRaf=requestAnimationFrame(swUpdate);
+  }
+  $('swStart').onclick=()=>{
+    if(swRunning)return;
+    swStartT=now();swRunning=true;
+    $('swStart').disabled=true;$('swStop').disabled=false;
+    swUpdate();
+  };
+  $('swStop').onclick=()=>{
+    if(!swRunning)return;
+    swElapsed+=now()-swStartT;swRunning=false;cancelAnimationFrame(swRaf);
+    $('swDisplay').textContent=fmtMs(swElapsed);
+    $('swStart').disabled=false;$('swStop').disabled=true;
+  };
+  $('swReset').onclick=()=>{
+    swRunning=false;cancelAnimationFrame(swRaf);swElapsed=0;laps=[];
+    $('swDisplay').textContent='00:00.000';$('lapList').innerHTML='';
+    $('swStart').disabled=false;$('swStop').disabled=true;
+  };
+  $('swLap').onclick=()=>{
+    const t=swCurrent();laps.push(t);
+    const li=document.createElement('li');
+    li.textContent=`Lap ${laps.length}: ${fmtMs(t)}`;
+    $('lapList').prepend(li);
+  };
+
+  // ---- Frame calculator ----
+  function framesToParts(frames){
+    frames=Math.max(0,Math.round(frames));
+    const m=Math.floor(frames/(FPS*60));
+    frames-=m*FPS*60;
+    const s=Math.floor(frames/FPS);
+    const f=frames%FPS;
+    return {m,s,f};
+  }
+  function renderCdFromFields(){
+    let m=Math.max(0,parseInt($('cdMin').value)||0);
+    let s=Math.max(0,parseInt($('cdSec').value)||0);
+    let f=Math.max(0,parseInt($('cdFrame').value)||0);
+    const total=m*60*FPS+s*FPS+f;
+    const p=framesToParts(total);
+    $('cdDisplay').textContent=`${String(p.m).padStart(2,'0')}:${String(p.s).padStart(2,'0')}:${String(p.f).padStart(2,'0')}F`;
+  }
+  ['cdMin','cdSec','cdFrame'].forEach(id=>$(id).addEventListener('input',renderCdFromFields));
+
+  $('calcBtn').onclick=()=>{
+    const target=Number($('targetFrame').value);
+    const current=Number($('currentFrame').value);
+    if(!Number.isFinite(target)||!Number.isFinite(current)){
+      $('calcResult').textContent='目標Fと現在Fを入力してや。';return;
+    }
+    const swFrames=$('useSw').checked?Math.round(swCurrent()/1000*FPS):0;
+    const extra=parseInt($('extraFrames').value)||0;
+    const estimated=current+swFrames+extra;
+    const remain=Math.round(target-estimated);
+
+    if(remain<=0){
+      $('calcResult').innerHTML=`推定現在F: <strong>${estimated}</strong><br>目標を <strong>${Math.abs(remain)}F</strong> 通過してる。`;
+      return;
+    }
+    const p=framesToParts(remain);
+    $('cdMin').value=p.m;$('cdSec').value=p.s;$('cdFrame').value=p.f;
+    renderCdFromFields();
+    $('calcResult').innerHTML=
+      `調合解析F: <strong>${current}</strong><br>`+
+      `STOPまでの加算: <strong>${swFrames}F</strong>（${fmtMs(swCurrent())}）<br>`+
+      `追加補正: <strong>${extra}F</strong><br>`+
+      `推定現在F: <strong>${estimated}</strong><br>`+
+      `残り: <strong>${remain}F</strong> = <strong>${p.m}分 ${p.s}秒 ${p.f}F</strong>`;
+  };
+
+  // ---- Countdown ----
+  let cdRunning=false,cdStartT=0,cdEndT=0,cdRaf=0,lastSec=null,phase='idle';
+
+  function cdTotalFrames(){
+    const m=Math.max(0,parseInt($('cdMin').value)||0);
+    const s=Math.max(0,parseInt($('cdSec').value)||0);
+    const f=Math.max(0,parseInt($('cdFrame').value)||0);
+    const off=parseInt($('offsetFrame').value)||0;
+    return Math.max(0,m*60*FPS+s*FPS+f+off);
+  }
+  function cdFormatFromMs(ms){
+    const frames=Math.max(0,Math.ceil(ms/1000*FPS-1e-9));
+    const p=framesToParts(frames);
+    return `${String(p.m).padStart(2,'0')}:${String(p.s).padStart(2,'0')}:${String(p.f).padStart(2,'0')}F`;
+  }
+  function cdUpdate(){
+    if(!cdRunning)return;
+    const t=now();
+    const remain=cdEndT-t;
+
+    if(phase==='delay'){
+      if(remain<=0){
+        phase='active';
+        const totalFrames=cdTotalFrames();
+        cdEndT=t+totalFrames/FPS*1000;
+        lastSec=null;
+        $('cdLabel').textContent='カウント中';
+      }else{
+        $('cdDisplay').textContent=cdFormatFromMs(remain);
+      }
+    }else{
+      $('cdDisplay').textContent=cdFormatFromMs(remain);
+      const sec=Math.ceil(remain/1000);
+      if(remain>0 && sec<=10 && sec!==lastSec){
+        lastSec=sec;
+        if($('soundEnable').checked) beep(sec<=3?1200:800,.08,.09);
+      }
+      if(remain<=0){
+        cdRunning=false;
+        $('cdDisplay').textContent='00:00:00F';
+        $('cdLabel').textContent='終了';
+        $('cdStart').disabled=false;$('cdStop').disabled=true;
+        document.body.classList.add('flash');
+        if($('soundEnable').checked) beep(1700,.35,.14);
+        setTimeout(()=>document.body.classList.remove('flash'),500);
+        return;
+      }
+    }
+    cdRaf=requestAnimationFrame(cdUpdate);
+  }
+
+  $('cdStart').onclick=()=>{
+    ensureAudio();
+    cdRunning=true;phase='delay';
+    $('cdStart').disabled=true;$('cdStop').disabled=false;
+    const delay=Math.max(0,Number($('cdDelay').value)||0)*1000;
+    cdStartT=now();cdEndT=cdStartT+delay;
+    $('cdLabel').textContent=delay>0?'開始猶予':'カウント中';
+    if(delay<=0){phase='active';cdEndT=cdStartT+cdTotalFrames()/FPS*1000;}
+    cdUpdate();
+  };
+  $('cdStop').onclick=()=>{
+    cdRunning=false;cancelAnimationFrame(cdRaf);
+    $('cdLabel').textContent='停止中';
+    $('cdStart').disabled=false;$('cdStop').disabled=true;
+  };
+  $('cdReset').onclick=()=>{
+    cdRunning=false;cancelAnimationFrame(cdRaf);phase='idle';lastSec=null;
+    $('cdLabel').textContent='待機中';$('cdStart').disabled=false;$('cdStop').disabled=true;
+    renderCdFromFields();
+  };
+
+  renderCdFromFields();
+
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden){
+      // performance.now基準なので復帰後も経過時間は自動補正される
+    }
+  });
+})();
+</script>
+</body>
+</html>
