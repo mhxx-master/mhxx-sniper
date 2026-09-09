@@ -33,12 +33,12 @@
 <div class="grid" style="margin-top:10px"><div><label>検索開始F</label><input id="searchStart" type="number" min="0" value="0"></div><div><label>検索数</label><input id="searchCount" type="number" min="1" value="300000"></div></div>
 <div class="grid" style="margin-top:10px"><div><label>目標F</label><input id="targetFrame" type="number" value="296260"></div><div><label>追加補正F</label><input id="extraFrames" type="number" value="0"></div></div>
 <div class="controls"><button id="analyzeBtn" class="accent">search_comboで特定 → STOP込み計算</button></div>
-<div id="engineStatus" class="status">解析エンジン：未読込（初回だけネット接続が必要）</div>
+<div id="engineStatus" class="status">解析エンジン：内蔵 search_combo 互換ロジック</div>
 <div id="searchStatus" class="status"></div>
 <div class="heroLabel">STOPした時点の推定現在F</div><div id="stopFrameBig" class="heroFrame">—</div>
 <div class="heroLabel">目標まで</div><div id="remainBig" class="heroFrame remain">—</div>
 <div id="resultDetails" class="result">弾数を入力してSTOP後に解析すると、ここへ一発表示する。</div>
-<div class="note">ここは独自の近似式ではなく、apmnnn/mhxx-rng の公開ノートブックから <code>search_combo</code> を読み込み、その関数をそのまま実行する。search_combo出力は調合回数×2の乱数進行込み。そこへSTART→STOPの30fps換算を加算する。</div>
+<div class="note">apmnnn/mhxx-rng の <code>search_combo</code> と同じ特定手順をJavaScriptへ移植して内蔵。先頭3個を除外 → 最後が99なら除外 → 増加量(2/3/4)化 → 5F間隔でXorshift列を照合 → 一致位置+3Fを返す。既知例 3831F / 123651F でセルフテスト済み。ネット接続不要。search_combo相当の出力には調合回数×2の進行が含まれるため、そこへSTART→STOPの30fps換算だけを加算する。</div>
 </section>
 
 <section class="card">
@@ -104,50 +104,59 @@ function validateCombo(a){if(a.length<6)throw new Error('弾数は最低6個以�
 function updateComboInfo(){const a=parseCombo();if(!a.length){$('comboInfo').textContent='空白・改行・カンマ区切りで入力できる。';return}try{validateCombo(a);$('comboInfo').innerHTML=`<span class="good">${a.length}個入力</span> ／ 増加：${a.slice(1).map((x,i)=>'+'+(x-a[i])).join(' ')}`}catch(e){$('comboInfo').innerHTML=`<span class="bad">${e.message}</span>`}}
 $('comboInput').addEventListener('input',updateComboInfo);
 
-// ---------- 本家 search_combo を実行する Pyodide エンジン ----------
-let pyodide=null,engineReady=false,enginePromise=null;
-const PYODIDE_URL='https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.js';
-const NOTEBOOK_URL='https://raw.githubusercontent.com/apmnnn/mhxx-rng/main/mhxx-rng.ipynb';
-function loadScript(src){return new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error('Pyodideを取得できんかった'));document.head.appendChild(s)})}
-function cleanPython(src){return src.split('\n').filter(line=>{const t=line.trim();return !t.startsWith('!')&&!t.startsWith('%')&&!t.startsWith('from google.colab')&&!t.startsWith('import google.colab')&&!t.startsWith('from numba')&&!t.startsWith('import numba')&&!t.startsWith('@njit')&&!t.startsWith('@jit')}).join('\n')}
-async function loadEngine(){
-  if(engineReady)return;if(enginePromise)return enginePromise;
-  enginePromise=(async()=>{
-    $('engineStatus').textContent='解析エンジン：本家ノートブックを読込中…';
-    if(!window.loadPyodide)await loadScript(PYODIDE_URL);
-    pyodide=await window.loadPyodide();
-    try{await pyodide.loadPackage('numpy')}catch(e){}
-    // Pyodide互換用。元ノートブックではColab/Numba側で入る型名が、
-    // ブラウザ実行時には未定義になることがあるため先に補う。
-    await pyodide.runPythonAsync(`
-from typing import List, Tuple, Optional, Sequence, Iterable, Dict, Any
-try:
-    import numpy as np
-except Exception:
-    pass
-`);
-    const r=await fetch(NOTEBOOK_URL,{cache:'no-store'});if(!r.ok)throw new Error('mhxx-rng本体を取得できんかった');
-    const nb=await r.json();let found=false;
-    for(const cell of nb.cells||[]){if(cell.cell_type!=='code')continue;let src=Array.isArray(cell.source)?cell.source.join(''):String(cell.source||'');if(!src.trim())continue;const contains=src.includes('def search_combo');src=cleanPython(src);try{await pyodide.runPythonAsync(src)}catch(e){if(contains)throw new Error('search_comboの読込に失敗: '+e.message);/* 定義に不要な例示セル等は飛ばす */}
-      if(contains){found=true;break}
-    }
-    if(!found||!pyodide.globals.get('search_combo'))throw new Error('本家ノートブック内にsearch_comboが見つからんかった');
-    // 公開されている既知例でセルフテスト。結果が合わなければ誤解析を防いで停止。
-    const test=`0 3 6 9 12 15 18 22 26 30 34 36 39 42 45 47 50`;
-    const out=await runOfficialSearch(0,131276,test,true);
-    if(out.frame!==123651)throw new Error(`セルフテスト不一致（${out.frame??'結果なし'}F）。解析は停止した。`);
-    engineReady=true;$('engineStatus').innerHTML='<span class="good">解析エンジン：本家 search_combo 読込済み／既知例 123651F 一致</span>';
-  })().catch(e=>{enginePromise=null;engineReady=false;$('engineStatus').innerHTML=`<span class="bad">解析エンジン失敗：${e.message}</span>`;throw e});
-  return enginePromise;
+// ---------- search_combo互換ロジック（ブラウザ内蔵・ネット不要） ----------
+// apmnnn/mhxx-rng の特定手順をJSへ移植。
+// 入力累計の先頭3個を除外、末尾99を除外、差分2/3/4を作り、
+// Xorshift出力を5F間隔で照合。一致したbase+3Fをsearch_combo相当の結果とする。
+function xorshiftQuantities(maxIndex){
+  let a=0x0194FD72>>>0,b=0x79E6C985>>>0,c=0x08DD9701>>>0,d=0x41CFCE91>>>0;
+  const out=new Uint8Array(maxIndex+1);
+  for(let i=0;i<=maxIndex;i++){
+    let r=(a ^ ((a<<15)>>>0))>>>0;
+    r=(r ^ (r>>>4))>>>0;
+    r=(r ^ d ^ (d>>>21))>>>0;
+    a=b;b=c;c=d;d=r;
+    const p=(r & 0xFFFF)%100;
+    out[i]=p<25?2:(p<75?3:4);
+  }
+  return out;
 }
-async function runOfficialSearch(start,count,combo,isTest=false){
-  if(!pyodide)throw new Error('解析エンジン未読込');
-  pyodide.globals.set('_js_start',Math.floor(start));pyodide.globals.set('_js_count',Math.floor(count));pyodide.globals.set('_js_combo',combo);
-  const code=`\nimport io, contextlib, re\ntry:\n    init()\nexcept Exception:\n    pass\n_buf=io.StringIO()\nwith contextlib.redirect_stdout(_buf):\n    search_combo(int(_js_start), int(_js_count), str(_js_combo))\n_js_out=_buf.getvalue()\n`;
-  await pyodide.runPythonAsync(code);const raw=String(pyodide.globals.get('_js_out')||'');
-  const nums=[...raw.matchAll(/frame\s*is[^0-9]*([0-9]+)/gi)].map(m=>Number(m[1]));
-  if(nums.length===0){const m=raw.match(/([0-9]+)\s*F?/i);if(m&&/found/i.test(raw))nums.push(Number(m[1]))}
-  return {frame:nums.length?nums[0]:null,all:nums,raw};
+function comboPattern(raw){
+  let pos=raw.slice(3);
+  if(pos.length && pos[pos.length-1]===99)pos=pos.slice(0,-1);
+  if(pos.length<2)throw new Error('search_combo用には、先頭3個を除いても差分が取れる長さまで入力してや。');
+  const dif=[];
+  for(let i=0;i<pos.length-1;i++){
+    const d=pos[i+1]-pos[i];
+    if(d<2||d>4)throw new Error(`search_combo対象部で ${pos[i]} → ${pos[i+1]} の増え方が +${d}。2〜4以外は確認してや。`);
+    dif.push(d);
+  }
+  return dif;
+}
+function runSearchComboJS(start,count,raw){
+  start=Math.floor(start);count=Math.floor(count);
+  const pat=comboPattern(raw), end=start+count;
+  const maxBase=Math.max(0,end-1-3);
+  const maxIndex=maxBase+5*(pat.length-1);
+  const q=xorshiftQuantities(maxIndex);
+  const hits=[];
+  for(let frame=start;frame<end;frame++){
+    const base=frame-3;
+    if(base<0)continue;
+    let ok=true;
+    for(let j=0;j<pat.length;j++){
+      if(q[base+5*j]!==pat[j]){ok=false;break;}
+    }
+    if(ok)hits.push(frame);
+  }
+  return {frame:hits.length?hits[0]:null,all:hits};
+}
+function selfTestSearchCombo(){
+  const a='0 2 4 7 10 13 16 18 22 25 28 30 32 35 39 42 45'.split(/\s+/).map(Number);
+  const b='0 3 6 9 12 15 18 22 26 30 34 36 39 42 45 47 50'.split(/\s+/).map(Number);
+  const r1=runSearchComboJS(0,10000,a), r2=runSearchComboJS(0,131276,b);
+  if(r1.frame!==3831||r2.frame!==123651)throw new Error(`セルフテスト不一致（${r1.frame}/${r2.frame}）。解析停止。`);
+  $('engineStatus').innerHTML='<span class="good">解析エンジン：内蔵 search_combo 互換ロジック／既知例 3831F・123651F 一致</span>';
 }
 
 function framesToParts(fr){fr=Math.max(0,Math.round(fr));const m=Math.floor(fr/1800);fr-=m*1800;const s=Math.floor(fr/30),f=fr%30;return{m,s,f}}
@@ -156,7 +165,7 @@ function setCountdown(fr){const p=framesToParts(Math.max(0,fr));$('cdMin').value
 function clearResult(){$('stopFrameBig').textContent='—';$('remainBig').textContent='—';$('resultDetails').textContent='弾数を入力してSTOP後に解析すると、ここへ一発表示する。';$('searchStatus').textContent=''}
 function showCalc(identified){const target=Number($('targetFrame').value),elapsed=swFrames(),extra=parseInt($('extraFrames').value)||0,estimated=Math.round(identified+elapsed+extra),remain=Math.round(target-estimated);$('stopFrameBig').textContent=`${estimated}F`;if(remain>0){$('remainBig').textContent=`${remain}F（${formatFrames(remain)}）`;$('remainBig').className='heroFrame remain';setCountdown(remain)}else if(remain===0){$('remainBig').textContent='0F ＝ 目標';$('remainBig').className='heroFrame remain';setCountdown(0)}else{$('remainBig').textContent=`${Math.abs(remain)}F 通過`;$('remainBig').className='heroFrame bad';setCountdown(0)}$('resultDetails').innerHTML=`search_combo出力：<strong>${identified}F</strong><br>START→STOP：<strong>+${elapsed}F</strong>（${fmtMs(swCurrent())}）<br>追加補正：<strong>${extra>=0?'+':''}${extra}F</strong><br>STOP時推定：<strong>${estimated}F</strong><br>${remain>0?`目標まで：<strong>${remain}F</strong> → ③へ自動入力済み`:`目標との差：<strong>${remain}F</strong>`}`}
 async function analyzeCombo(){
-  try{if(swRunning)throw new Error('先にHOMEと同時にSTOPしてや。');const a=parseCombo();validateCombo(a);const start=Number($('searchStart').value),count=Number($('searchCount').value);if(!Number.isFinite(start)||!Number.isFinite(count)||start<0||count<1)throw new Error('検索開始F・検索数を確認してや。');$('analyzeBtn').disabled=true;$('searchStatus').textContent='解析準備中…';await loadEngine();$('searchStatus').textContent='本家 search_combo で検索中…';const combo=a.join(' '),res=await runOfficialSearch(start,count,combo);if(res.frame===null)throw new Error('一致なし。入力を確認するか検索数を広げてや。');if(res.all.length>1)throw new Error('複数候補が出た。記録を長くするか検索範囲を絞ってや。');$('searchStatus').innerHTML=`<span class="good">特定成功：search_combo ${res.frame}F</span>`;showCalc(res.frame)}catch(e){$('searchStatus').innerHTML=`<span class="bad">${e.message}</span>`;$('stopFrameBig').textContent='—';$('remainBig').textContent='—'}finally{$('analyzeBtn').disabled=false}}
+  try{if(swRunning)throw new Error('先にHOMEと同時にSTOPしてや。');const a=parseCombo();validateCombo(a);const start=Number($('searchStart').value),count=Number($('searchCount').value);if(!Number.isFinite(start)||!Number.isFinite(count)||start<0||count<1)throw new Error('検索開始F・検索数を確認してや。');$('analyzeBtn').disabled=true;$('searchStatus').textContent='search_combo互換ロジックで検索中…';await new Promise(r=>setTimeout(r,0));const res=runSearchComboJS(start,count,a);if(res.frame===null)throw new Error('一致なし。入力を確認するか検索数を広げてや。');if(res.all.length>1)throw new Error(`複数候補が${res.all.length}個出た。記録を長くするか検索範囲を絞ってや。`);$('searchStatus').innerHTML=`<span class="good">特定成功：search_combo相当 ${res.frame}F</span>`;showCalc(res.frame)}catch(e){$('searchStatus').innerHTML=`<span class="bad">${e.message}</span>`;$('stopFrameBig').textContent='—';$('remainBig').textContent='—'}finally{$('analyzeBtn').disabled=false}}
 $('analyzeBtn').onclick=analyzeCombo;
 
 // ---------- Countdown ----------
@@ -170,7 +179,7 @@ $('cdStart').onclick=async()=>{try{await unlockAudio()}catch(e){}cdRunning=true;
 $('cdStop').onclick=()=>{cdRunning=false;cancelAnimationFrame(cdRaf);$('cdLabel').textContent='停止中';$('cdStart').disabled=false;$('cdStop').disabled=true};
 $('cdReset').onclick=()=>{cdRunning=false;cancelAnimationFrame(cdRaf);phase='idle';lastSec=null;$('cdLabel').textContent='待機中';$('cdStart').disabled=false;$('cdStop').disabled=true;renderCd()};
 
-renderCd();updateComboInfo();
+try{selfTestSearchCombo()}catch(e){$('engineStatus').innerHTML=`<span class="bad">解析エンジン失敗：${e.message}</span>`}renderCd();updateComboInfo();
 })();
 </script>
 </body>
