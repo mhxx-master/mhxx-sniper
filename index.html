@@ -106,6 +106,7 @@ summary{cursor:pointer;color:var(--muted);font-size:.88rem}
     <button id="metPause" class="danger" disabled>停止</button>
     <button id="metReset" class="warn">リセット</button>
     <button id="manualPlus" class="accent">+1 手動</button>
+    <button id="metSoundTest">音テスト</button>
   </div>
   <div class="note">実時間から拍数を計算する方式。Continue回数の目安作り用。</div>
 </section>
@@ -198,20 +199,34 @@ summary{cursor:pointer;color:var(--muted);font-size:.88rem}
   let audioCtx = null;
 
   function now(){ return performance.now(); }
-  function ensureAudio(){
+  async function ensureAudio(){
     if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if(audioCtx.state === 'suspended') audioCtx.resume();
+    if(audioCtx.state === 'suspended'){
+      try{ await audioCtx.resume(); }catch(e){}
+    }
+    // iPhone/Safari向け：ユーザー操作中に無音バッファを再生して音声出力を確実に解禁
+    try{
+      const buffer=audioCtx.createBuffer(1,1,22050);
+      const src=audioCtx.createBufferSource();
+      src.buffer=buffer;src.connect(audioCtx.destination);src.start(0);
+    }catch(e){}
+    return audioCtx;
   }
-  function beep(freq=880, duration=.08, volume=.08){
+  async function playTone(freq=880,duration=.08,volume=.10){
+    const ctx=await ensureAudio();
+    if(!ctx || ctx.state!=='running') return;
+    const o=ctx.createOscillator();
+    const g=ctx.createGain();
+    const t=ctx.currentTime;
+    o.frequency.setValueAtTime(freq,t);
+    g.gain.setValueAtTime(Math.max(.0001,volume),t);
+    g.gain.exponentialRampToValueAtTime(.0001,t+duration);
+    o.connect(g);g.connect(ctx.destination);
+    o.start(t);o.stop(t+duration);
+  }
+  function beep(freq=880,duration=.08,volume=.10){
     if(!$('soundEnable')?.checked && freq !== 660) return;
-    ensureAudio();
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    o.frequency.value=freq;
-    g.gain.setValueAtTime(volume,audioCtx.currentTime);
-    g.gain.exponentialRampToValueAtTime(.0001,audioCtx.currentTime+duration);
-    o.connect(g);g.connect(audioCtx.destination);
-    o.start();o.stop(audioCtx.currentTime+duration);
+    playTone(freq,duration,volume);
   }
 
   // ---- Continue metronome ----
@@ -229,13 +244,8 @@ summary{cursor:pointer;color:var(--muted);font-size:.88rem}
     if(beats!==lastPlayed){
       lastPlayed=beats;
       if(count>0 && count<=target){
-        ensureAudio();
         const isTen=count%10===0;
-        const o=audioCtx.createOscillator(),g=audioCtx.createGain();
-        o.frequency.value=isTen?1000:520;
-        g.gain.setValueAtTime(.055,audioCtx.currentTime);
-        g.gain.exponentialRampToValueAtTime(.0001,audioCtx.currentTime+.045);
-        o.connect(g);g.connect(audioCtx.destination);o.start();o.stop(audioCtx.currentTime+.045);
+        playTone(isTen?1100:620,.065,isTen?.16:.12);
       }
     }
     if(count>=target){
@@ -249,11 +259,17 @@ summary{cursor:pointer;color:var(--muted);font-size:.88rem}
     $('metStatus').textContent='カウント中';
     metRaf=requestAnimationFrame(metUpdate);
   }
-  $('metStart').onclick=()=>{
-    ensureAudio();
+  $('metStart').onclick=async()=>{
+    await ensureAudio();
+    await playTone(760,.07,.12);
     metBaseCount=parseInt($('metCount').textContent)||0;
     metStartT=now();lastPlayed=-1;metRunning=true;
     $('metStart').disabled=true;$('metPause').disabled=false;metUpdate();
+  };
+  $('metSoundTest').onclick=async()=>{
+    await ensureAudio();
+    await playTone(620,.10,.14);
+    setTimeout(()=>playTone(1000,.12,.16),130);
   };
   $('metPause').onclick=()=>{
     if(!metRunning)return;
