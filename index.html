@@ -86,7 +86,7 @@ button:disabled{opacity:.45}
 <div class="heroLabel">STOPした時点の推定現在F</div><div id="stopFrameBig" class="heroFrame">—</div>
 <div class="heroLabel">目標まで</div><div id="remainBig" class="heroFrame remain">—</div>
 <div id="resultDetails" class="result">弾数を入力してSTOP後に解析すると、ここへ一発表示する。</div>
-<div class="note">apmnnn/mhxx-rng の <code>search_combo</code> と同じ特定手順をJavaScriptへ移植して内蔵。先頭3個を除外 → 最後が99なら除外 → 増加量(2/3/4)化 → 5F間隔でXorshift列を照合 → 一致位置+3Fを返す。既知例 3831F / 123651F でセルフテスト済み。ネット接続不要。search_combo相当の出力には調合回数×2の進行が含まれるため、そこへSTART→STOPの30fps換算だけを加算する。</div>
+<div class="note">apmnnn/mhxx-rng の <code>search_combo</code> と同じ特定手順をJavaScriptへ移植して内蔵。先頭3個を除外 → 最後が99なら除外 → 増加量(2/3/4)化 → まず5F間隔でXorshift列を完全一致検索 → 一致位置+3Fを返す。完全一致しない場合だけ、各間隔4/5/6F・ズレ最大12回の「ゆる検索」へ自動切替し、ズレ回数最少の候補を探す。同率候補が複数なら勝手に決めず表示して停止する。既知例 3831F / 123651F で完全一致セルフテスト済み。ネット接続不要。search_combo相当の出力には調合回数×2の進行が含まれるため、そこへSTART→STOPの30fps換算だけを加算する。</div>
 </section>
 
 <section class="card">
@@ -203,6 +203,50 @@ function runSearchComboJS(start,count,raw){
   }
   return {frame:hits.length?hits[0]:null,all:hits};
 }
+
+// 実機でまれに入る1F前後の不定消費を許容する実験モード。
+// 各調合間隔を基本5Fとし、4F/6Fも許可。5F以外を1回のズレとして数え、
+// 検索範囲内で「ズレ回数が最少」の開始F候補を返す。
+function runSearchComboFuzzyJS(start,count,raw,maxDeviations=12){
+  start=Math.floor(start);count=Math.floor(count);
+  const pat=comboPattern(raw), end=start+count;
+  const minBase=Math.max(0,start-3), maxBase=Math.max(0,end-1-3);
+  const maxIndex=maxBase+6*(pat.length-1)+2;
+  const q=xorshiftQuantities(maxIndex);
+  const INF=127;
+  let prevCost=new Int16Array(maxIndex+1), currCost=new Int16Array(maxIndex+1);
+  let prevStart=new Int32Array(maxIndex+1), currStart=new Int32Array(maxIndex+1);
+  prevCost.fill(INF); prevStart.fill(-1);
+  for(let i=minBase;i<=maxBase;i++){
+    if(q[i]===pat[0]){prevCost[i]=0;prevStart[i]=i+3;}
+  }
+  for(let j=1;j<pat.length;j++){
+    currCost.fill(INF); currStart.fill(-1);
+    const lo=minBase+4*j, hi=Math.min(maxIndex,maxBase+6*j);
+    for(let i=lo;i<=hi;i++){
+      if(q[i]!==pat[j])continue;
+      let best=INF,bestStart=-1;
+      for(let step=4;step<=6;step++){
+        const pi=i-step;
+        if(pi<0)continue;
+        const pc=prevCost[pi];
+        if(pc>=INF)continue;
+        const nc=pc+(step===5?0:1);
+        if(nc<best){best=nc;bestStart=prevStart[pi];}
+      }
+      if(best<=maxDeviations){currCost[i]=best;currStart[i]=bestStart;}
+    }
+    [prevCost,currCost]=[currCost,prevCost];
+    [prevStart,currStart]=[currStart,prevStart];
+  }
+  let best=INF;
+  for(let i=0;i<=maxIndex;i++)if(prevCost[i]<best)best=prevCost[i];
+  if(best>=INF||best>maxDeviations)return {frame:null,all:[],deviations:null,fuzzy:true};
+  const set=new Set();
+  for(let i=0;i<=maxIndex;i++)if(prevCost[i]===best&&prevStart[i]>=start&&prevStart[i]<end)set.add(prevStart[i]);
+  const all=[...set].sort((a,b)=>a-b);
+  return {frame:all.length===1?all[0]:null,all,deviations:best,fuzzy:true};
+}
 function selfTestSearchCombo(){
   const a='0 2 4 7 10 13 16 18 22 25 28 30 32 35 39 42 45'.split(/\s+/).map(Number);
   const b='0 3 6 9 12 15 18 22 26 30 34 36 39 42 45 47 50'.split(/\s+/).map(Number);
@@ -234,11 +278,23 @@ async function analyzeCombo(){
     if(!Number.isFinite(start)||!Number.isFinite(count)||start<0||count<1)throw new Error('検索開始F・検索数を確認してや。');
     $('analyzeBtn').disabled=true;$('searchStatus').textContent='search_combo互換ロジックで検索中…';
     await new Promise(r=>setTimeout(r,0));
-    const res=runSearchComboJS(start,count,a);
-    if(res.frame===null)throw new Error('一致なし。入力を確認するか検索数を広げてや。');
-    if(res.all.length>1)throw new Error(`複数候補が${res.all.length}個出た。記録を長くするか検索範囲を絞ってや。`);
-    $('searchStatus').innerHTML=`<span class="good">特定成功：search_combo相当 ${res.frame}F</span>`;
-    showCalc(res.frame);
+    let res=runSearchComboJS(start,count,a);
+    if(res.all.length>1)throw new Error(`完全一致候補が${res.all.length}個出た。記録を長くするか検索範囲を絞ってや。`);
+    if(res.frame!==null){
+      $('searchStatus').innerHTML=`<span class="good">完全一致：search_combo相当 ${res.frame}F</span>`;
+      showCalc(res.frame);
+    }else{
+      $('searchStatus').textContent='完全一致なし → 4〜6F許容のゆる検索中…';
+      await new Promise(r=>setTimeout(r,0));
+      res=runSearchComboFuzzyJS(start,count,a,12);
+      if(!res.all.length)throw new Error('完全一致も、4〜6F許容検索も候補なし。入力か検索範囲を確認してや。');
+      if(res.all.length>1){
+        const shown=res.all.slice(0,8).join('F / ')+'F';
+        throw new Error(`ゆる検索で同率候補が${res.all.length}個（ズレ${res.deviations}回）：${shown}${res.all.length>8?' …':''}。検索開始F/検索数を絞るか記録を長くしてや。`);
+      }
+      $('searchStatus').innerHTML=`<span class="warnText">ゆる検索で特定：${res.frame}F（4〜6F許容・ズレ${res.deviations}回）</span>`;
+      showCalc(res.frame);
+    }
   }catch(e){$('searchStatus').innerHTML=`<span class="bad">${e.message}</span>`;$('stopFrameBig').textContent='—';$('remainBig').textContent='—'}
   finally{$('analyzeBtn').disabled=false}
 }
