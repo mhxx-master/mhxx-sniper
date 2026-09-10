@@ -86,7 +86,7 @@ button:disabled{opacity:.45}
 <div class="heroLabel">STOPした時点の推定現在F</div><div id="stopFrameBig" class="heroFrame">—</div>
 <div class="heroLabel">目標まで</div><div id="remainBig" class="heroFrame remain">—</div>
 <div id="resultDetails" class="result">弾数を入力してSTOP後に解析すると、ここへ一発表示する。</div>
-<div class="note">apmnnn/mhxx-rng の <code>search_combo</code> と同じ特定手順をJavaScriptへ移植して内蔵。先頭3個を除外 → 最後が99なら除外 → 増加量(2/3/4)化 → まず5F間隔でXorshift列を完全一致検索 → 一致位置+3Fを返す。完全一致しない場合だけ、各間隔4/5/6F・ズレ最大12回の「ゆる検索」へ自動切替し、ズレ回数最少の候補を探す。同率候補が複数なら勝手に決めず表示して停止する。既知例 3831F / 123651F で完全一致セルフテスト済み。ネット接続不要。search_combo相当の出力には調合回数×2の進行が含まれるため、そこへSTART→STOPの30fps換算だけを加算する。</div>
+<div class="note">apmnnn/mhxx-rng の <code>search_combo</code> と同じ特定手順をJavaScriptへ移植して内蔵。先頭3個を除外 → 最後が99なら除外 → 増加量(2/3/4)化 → まず5F間隔でXorshift列を完全一致検索 → 一致位置+3Fを返す。完全一致しない場合だけ、各間隔4/5/6F・ズレ最大12回の「ゆる検索」へ自動切替し、ズレ回数最少の候補を探す。同率候補が複数なら勝手に決めず表示して停止する。完全一致 3831F / 123651F に加え、誤差検索 292393F（途中1Fズレ）のセルフテスト済み。ネット接続不要。search_combo相当の出力には調合回数×2の進行が含まれるため、そこへSTART→STOPの30fps換算だけを加算する。</div>
 </section>
 
 <section class="card">
@@ -248,11 +248,17 @@ function runSearchComboFuzzyJS(start,count,raw,maxDeviations=12){
   return {frame:all.length===1?all[0]:null,all,deviations:best,fuzzy:true};
 }
 function selfTestSearchCombo(){
+  // 完全一致2例 + 実機で確認した「途中1Fズレ」1例を起動時に検証する。
   const a='0 2 4 7 10 13 16 18 22 25 28 30 32 35 39 42 45'.split(/\s+/).map(Number);
   const b='0 3 6 9 12 15 18 22 26 30 34 36 39 42 45 47 50'.split(/\s+/).map(Number);
-  const r1=runSearchComboJS(0,10000,a), r2=runSearchComboJS(0,131276,b);
-  if(r1.frame!==3831||r2.frame!==123651)throw new Error(`セルフテスト不一致（${r1.frame}/${r2.frame}）。解析停止。`);
-  $('engineStatus').innerHTML='<span class="good">解析エンジン：内蔵 search_combo 互換ロジック／既知例 3831F・123651F 一致</span>';
+  const c='0 2 5 7 10 13 16 19 21 25 28 31 35 37 41 43 46 50 53 57 61 63 67 70 72'.split(/\s+/).map(Number);
+  const r1=runSearchComboJS(0,10000,a);
+  const r2=runSearchComboJS(0,131276,b);
+  const r3=runSearchComboFuzzyJS(0,300000,c,12);
+  if(r1.frame!==3831||r2.frame!==123651||r3.frame!==292393||r3.deviations!==1){
+    throw new Error(`セルフテスト不一致（完全:${r1.frame}/${r2.frame}・誤差:${r3.frame},ずれ${r3.deviations}）。解析停止。`);
+  }
+  $('engineStatus').innerHTML='<span class="good">解析エンジン正常：完全一致 3831F・123651F ／ 誤差検索 292393F（ズレ1回）一致</span>';
 }
 
 function framesToParts(fr){fr=Math.max(0,Math.round(fr));const m=Math.floor(fr/1800);fr-=m*1800;const s=Math.floor(fr/30),f=fr%30;return{m,s,f}}
